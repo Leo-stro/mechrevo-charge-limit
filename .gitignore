@@ -1,0 +1,12 @@
+# 个人数据 / 第三方代码 —— 不发布
+records/
+uniwill-ec-charge-limit/
+
+# Python
+__pycache__/
+*.pyc
+
+# 系统
+Thumbs.db
+desktop.ini
+.DS_Store
