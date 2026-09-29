@@ -74,7 +74,63 @@ pythonw 电池充电上限.pyw
 - 档位按钮：50 / 60 / 70 / 80 / 90 / 100 %
 - 「取消限充（恢复充满）」：一键清除实时上限与固件存储值，电池恢复充电（实测 12 秒内 `ChargeRate=34034 mW`）
 
-**依赖**：Python 3（标准库即可，需要 tkinter）+ 机械革命控制中心（提供 `UWACPIDriver.sys` 设备节点 `\\.\ACPIDriver`）。
+**依赖**：Python 3（标准库即可，需要 tkinter）+ 一条能访问 EC 的通道（见下节）。
+
+## 两条访问通道（决定你要装什么）
+
+| 通道 | 需要什么 | 可写地址 | 本机实测 |
+|---|---|---|---|
+| **`\\.\ACPIDriver`（H2RAM）** ← 本项目默认 | 机械革命控制中心提供的 `UWACPIDriver.sys`，**免管理员** | `0x0700–0x07FF` | ✅ 精确停充、可逆、重启不丢 |
+| **ACPI WMI 邮箱**（`root\WMI` → `AcpiTest_MULong.GetSetULong`） | **管理员权限**，不需要 OEM 驱动 | 含 `0x0800` 以上（如存储区 `0x087F`） | ⚠️ 普通权限访问返回 `拒绝访问`；写入路径**未验证** |
+
+第二条来自固件自带的官方 WMI 邮箱（Uniwill 的 AMW0/WMBC 链路，Linux 内核驱动走的就是它）。
+理论上它更强 —— 能直接写存储区，不必用「临时开门控 2.5 秒」的技巧 —— 但它需要管理员权限，
+所以本项目默认不走。
+
+### 那个驱动从哪来（请不要转发）
+
+- **官方**：机械革命控制中心。按机型提供，从机械革命官网下载中心选你的型号下载；装上它，
+  `\\.\ACPIDriver` 才会出现。
+- **开源替代**：[OpenRevo](https://github.com/faintonce/open-revo) —— 轻量控制中心，宣称零官方组件依赖。
+- ❌ **不要把本机的 `UWACPIDriver.sys` 转发给别人**：它是 OEM 专有、带签名的**内核驱动**，
+  授权只随你购买的那台整机。转发既有版权问题，也让对方背上「安装来路不明内核驱动」的风险。
+  让对方自己装控制中心，或者走上面的 WMI 通道。
+
+## 给 AI agent 的落地说明
+
+> 这一节写给「把仓库地址丢给 agent、让它自己动手」的场景。人用请直接看上面的图形界面工具。
+
+### 0. 先自查，不要跳过
+
+| 检查项 | 通过条件 |
+|---|---|
+| 机型 | 采用 Uniwill/同方 EC（机械革命 / XMG / TUXEDO / Eluktronics / 部分神舟火影）。**其他品牌到此为止** |
+| 访问通道 | `\\.\ACPIDriver` 能打开（免管理员），或以管理员身份能取到 `AcpiTest_MULong` 实例 |
+| 只读探测 | 能读出 `0x0770` / `0x07C3` / `0x07B9` / `0x0742` |
+
+三条都过再往下。**不要盲写寄存器** —— 先只读，再存档，最后才写。
+
+### 1. 最小执行顺序
+
+1. **先读并存档原值**：`0x0770`、`0x07C3`、`0x07B9`（回滚要用）
+2. 写 `0x07B9 = 目标百分比`（50 → `0x32`）
+3. 写 `0x07C3 = 0x04`，保持 2.5 秒，**然后恢复原值**（本机为 `0x07`）
+4. 等 7 秒，读 `0x0742` bit2 = 1 → 门控已开
+5. 验证：把电量放到上限以下 → 插电 → 应精确停在目标值（`Charging=False`、`ChargeRate=0`）
+6. **取消时必须写 `0x07B9 = 0` 并再触发一次存储** —— 只关门控、不清上限，会让电池卡住不充电
+
+完整寄存器语义、门控伪代码、踩坑清单见 [`docs/FINDINGS.md`](docs/FINDINGS.md)。
+
+### 2. 文件直链（中文文件名必须 URL 编码）
+
+```
+README.md     https://raw.githubusercontent.com/Leo-stro/mechrevo-charge-limit/main/README.md
+逆向记录       https://raw.githubusercontent.com/Leo-stro/mechrevo-charge-limit/main/docs/FINDINGS.md
+主程序         https://raw.githubusercontent.com/Leo-stro/mechrevo-charge-limit/main/%E7%94%B5%E6%B1%A0%E5%85%85%E7%94%B5%E4%B8%8A%E9%99%90.pyw
+整仓 ZIP       https://github.com/Leo-stro/mechrevo-charge-limit/archive/refs/heads/main.zip
+```
+
+（未编码的中文路径会直接报错 —— 这是最容易踩的一脚。）
 
 ## 取消 / 还原
 
