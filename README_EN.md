@@ -68,6 +68,53 @@ live limit and the stored limit and immediately restores normal charging.
 Requires Python 3 with tkinter, and the Mechrevo Control Console (it provides `UWACPIDriver.sys`,
 device node `\\.\ACPIDriver`).
 
+## "Where is the EC?" — check which family your laptop belongs to
+
+The most common feedback is "I followed the README, but I can't find the EC on my machine". That is
+usually **not** a usage mistake: Mechrevo ships several different platforms, and the register layout /
+access path differs between them.
+
+| Your laptop | Platform | Works with this project? | How to tell |
+|---|---|---|---|
+| WUJIE 15X (the tested unit) | Uniwill/TongFang + AMI BIOS | ✅ no admin needed | `INOU0000` exists, `\\.\ACPIDriver` opens |
+| WUJIE 14 SE (7445HS) and similar | same EC family, but Windows exposes **no** `INOU0000` device | ⚠️ use the vendor ACPI-WMI classes instead (needs admin) | `ACPI\PNP0C14\HWMI` exposes `EmdAcpi_BatteryChargeRationing` |
+| WUJIE 14X (GX4HRXL / 14XA) | Uniwill, EC XRAM behind a 4 KiB MMIO window | ⚠️ similar registers, different path | `INOU0000` present, access path is yours to build |
+| WUJIE 14 Pro (WUJIE14 Series-HPT) | only `WMID.WMAA`; no `INOU` in the DSDT | ❌ most likely not usable (no success report yet) | run the probe script below |
+| Xingyao 14 (P916F-STX) | **a different system**: Insyde H2O firmware + ITE IT5571 EC | ❌ not usable | no `INOU0000` / `ECRR` / `ECRW`; the limiter lives in the ITE PMC2 command family (T1/T2 thresholds in EC XRAM `0x0D13` / `0x0D14`, ports `0x68` / `0x6C`), which needs kernel-mode port I/O |
+
+> The Xingyao 14 row comes from a third-party reverse-engineering reference
+> ([YMGPwcca/Mechrevo-Xingyao-14](https://github.com/YMGPwcca/Mechrevo-Xingyao-14)), which explicitly
+> rejects both "the generic Uniwill offsets `0x07B9`/`0x07D0` apply here" and "`INOU0000`/`ECRR`/`ECRW` exist".
+> The WUJIE 14 Pro row is an **inference** (no public Windows path, no success report seen yet).
+
+### 30-second self-check (read-only, changes nothing)
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/probe_charge_channels.ps1
+```
+
+It reports the machine identity, whether the no-admin channel opens (if `0x0740` reads back, you can use
+this project), and which vendor battery classes exist under `root\WMI`. **It writes no register, no
+registry key, no power setting.** When opening an issue, paste its full output.
+
+### If there is no EC channel, try in this order
+
+1. **Vendor ACPI-WMI battery classes first.** `EmdAcpi_BatteryChargeRationing` (GUID `6B40A935-...`):
+   you must **enumerate the instance and call `Invoke-CimMethod` on it** (class-level calls fail with
+   "invalid method parameter"), and it needs admin. Measured on a WUJIE 14 SE (7445HS):
+   `SetBatteryChargeRationing(Data)` takes the limit percentage 0-100, `0` = full — same semantics as
+   EC `0x07B9`. Verify read-only on your own model first.
+2. **Check whether the OEM control center implements it but hides the entry.** On several models the
+   shipped `GCUService` does implement `BatteryProtection2` (`Set|ReadBatteryChargingLimit_Up`/`_Down`,
+   `CHARGING_UP_LIMIT`/`DOWN_LIMIT`/`RECOVERY`), the UI simply does not expose it for that SKU.
+3. **Direct EC writes need two preconditions**: `INOU0000` in ACPI, and a path to H2RAM (the OEM
+   driver's `\\.\ACPIDriver`, or the WMI mailbox). Missing either one is not a parameter problem.
+4. **Machines like the Xingyao 14** keep the limiter behind ITE PMC2 port I/O, which requires kernel-mode
+   port access on Windows. This project does not do that, and we do not recommend users roll their own.
+5. **Do not**: blind-flash BIOS/EC firmware, redistribute someone else's OEM kernel driver, or reach for
+   a generic "EC writer" (WinRing0-style). The Linux kernel documentation warns that forcing a
+   charge-threshold interface on a device that implements it poorly **may damage the battery**.
+
 ## Risk / disclaimer
 
 Writes go to undocumented EC registers — community reverse-engineering, not a supported feature.
